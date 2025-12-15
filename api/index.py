@@ -155,7 +155,7 @@ def get_stats(host: str = None):
     
     return data[::-1]
 
-# Mount public directory for local development
-# On Vercel, this is handled by the CDN, but Uvicorn needs this to serve index.html
-if os.path.exists("public"):
-    app.mount("/", StaticFiles(directory="public", html=True), name="public")
+# Mount current directory for local development (to serve index.html)
+# Warning: In production Vercel serves static files directly, this is just for local Uvicorn
+if not os.environ.get("VERCEL"):
+    app.mount("/", StaticFiles(directory=".", html=True), name="root")
