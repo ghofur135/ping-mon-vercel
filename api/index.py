@@ -64,7 +64,23 @@ def health_check():
     return {"status": "ok"}
 
 
-def tcp_ping(host, port=80, timeout=2):
+def tcp_ping(host, ports=[80, 443, 53, 8080], timeout=2):
+    import socket
+    # If user provided a specific port in host (e.g., 1.2.3.4:9000), use that.
+    if ":" in host:
+        try:
+            h, p = host.split(":")
+            return _single_tcp_ping(h, int(p), timeout)
+        except:
+            pass
+            
+    for port in ports:
+        res = _single_tcp_ping(host, port, timeout)
+        if res is not None:
+            return res
+    return None
+
+def _single_tcp_ping(host, port, timeout):
     import socket
     start = time.time()
     try:
@@ -83,11 +99,14 @@ def perform_ping(target: PingTarget):
     method = "ICMP"
     
     try:
-        # Try ICMP Ping first
+        # Vercel almost always blocks ICMP (Permission denied).
+        # We try ICMP only if we are lucky (e.g. running locally as root), 
+        # otherwise we immediately fallback to smart TCP pinging.
         try:
-            latency = ping(host, timeout=2, unit='ms')
+            if os.environ.get("VERCEL"):
+                raise OSError("Skip ICMP on Vercel")
+            latency = ping(host, timeout=1, unit='ms')
         except OSError:
-            # Permission denied or socket error
             latency = None
         
         # Fallback to TCP Ping
