@@ -311,10 +311,21 @@
 </style>
 
 <script>
-    let hosts = JSON.parse(localStorage.getItem('monitored_hosts')) || ['8.8.8.8'];
-    const charts = {}; // Store chart instances
+    let hosts = [];
+    const charts = {};
     let pollingInterval = null;
     let isPaused = false;
+
+    // Load hosts from server on startup
+    async function loadHosts() {
+        try {
+            const res = await fetch('/api/hosts');
+            hosts = await res.json();
+            renderGrid();
+        } catch (e) {
+            console.error("Failed to load hosts", e);
+        }
+    }
 
     // Initialize UI
     function renderGrid() {
@@ -351,7 +362,6 @@
             `;
             grid.appendChild(card);
             
-            // Init Chart
             const ctx = document.getElementById(`chart-${cardId}`).getContext('2d');
             charts[host] = new Chart(ctx, {
                 type: 'line',
@@ -395,10 +405,9 @@
         try {
             const res = await fetch(`/api/stats?host=${host}`);
             const data = await res.json();
-            currentHistoryData = data; // Store for CSV export
+            currentHistoryData = data; 
             
             tbody.innerHTML = '';
-            // Data comes reversed (chronological), let's reverse back to show newest first for table
             [...data].reverse().forEach(row => {
                 const tr = document.createElement('tr');
                 const color = row.status === 'up' ? 'var(--success)' : 'var(--danger)';
@@ -416,15 +425,12 @@
 
     function downloadCsv() {
         if (!currentHistoryData || currentHistoryData.length === 0) return;
-        
         const headers = ['Timestamp,Status,Latency(ms)'];
         const rows = currentHistoryData.map(row => 
             `${row.timestamp},${row.status},${row.latency}`
         );
-        
         const csvContent = "data:text/csv;charset=utf-8," + headers.concat(rows).join("\n");
         const encodedUri = encodeURI(csvContent);
-        
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
         link.setAttribute("download", `ping_history_${currentHistoryHost}.csv`);
@@ -437,7 +443,6 @@
         document.getElementById('historyModal').style.display = 'none';
     }
     
-    // Close modal on outside click
     window.onclick = function(event) {
         const modal = document.getElementById('historyModal');
         if (event.target == modal) {
@@ -445,30 +450,44 @@
         }
     }
 
-    function addHost() {
+    async function addHost() {
         const input = document.getElementById('newHost');
         const host = input.value.trim();
-        if (host && !hosts.includes(host)) {
-            hosts.push(host);
-            saveAndRender();
+        if (host) {
+            // Save to server
+            try {
+                const res = await fetch('/api/hosts', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ host })
+                });
+                const data = await res.json();
+                if(data.status === 'added') {
+                    hosts.push(host);
+                    renderGrid();
+                } else {
+                    alert('Failed to add host');
+                }
+            } catch(e) { console.error(e); }
         }
         input.value = '';
     }
 
-    function removeHost(host) {
+    async function removeHost(host) {
         if(confirm(`Remove monitor for ${host}?`)) {
-            hosts = hosts.filter(h => h !== host);
-            if (charts[host]) {
-                charts[host].destroy();
-                delete charts[host];
-            }
-            saveAndRender();
+            try {
+                const res = await fetch(`/api/hosts/${host}`, { method: 'DELETE' });
+                const data = await res.json();
+                if(data.status === 'removed') {
+                    hosts = hosts.filter(h => h !== host);
+                    if (charts[host]) {
+                        charts[host].destroy();
+                        delete charts[host];
+                    }
+                    renderGrid();
+                }
+            } catch(e) { console.error(e); }
         }
-    }
-
-    function saveAndRender() {
-        localStorage.setItem('monitored_hosts', JSON.stringify(hosts));
-        renderGrid();
     }
 
     async function pollAll() {
@@ -491,9 +510,11 @@
 
     function updateCard(host, data) {
         const cardId = `card-${host.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        // Check if card still exists (might be deleted)
+        if(!document.getElementById(`status-${cardId}`)) return; 
+        
         const statusEl = document.getElementById(`status-${cardId}`);
         
-        // Update values
         if (data.status === 'up') {
             document.getElementById(`lat-${cardId}`).innerText = data.latency + ' ms';
             document.getElementById(`jit-${cardId}`).innerText = data.jitter + ' ms';
@@ -504,17 +525,12 @@
             statusEl.innerText = 'OFFLINE';
         }
 
-        // Update Chart
         if (charts[host]) {
             const chart = charts[host];
             const val = data.status === 'up' ? data.latency : 0;
-            
             chart.data.datasets[0].data.push(val);
             chart.data.datasets[0].data.shift();
-            
-            // Color based on latency/status
             chart.data.datasets[0].borderColor = data.status === 'up' ? '#38bdf8' : '#f87171';
-            
             chart.update();
         }
     }
@@ -525,7 +541,7 @@
     }
 
     // Init
-    renderGrid();
+    loadHosts();
     setInterval(pollAll, 2000);
 
 </script>

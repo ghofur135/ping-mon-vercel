@@ -27,11 +27,8 @@ app.add_middleware(
 # Use explicit /tmp path for Vercel
 DB_PATH = "/tmp/monitor.db" if os.environ.get("VERCEL") else "monitor.db"
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Create table if not exists with host column
+
+# ... (inside init_db)
     try:
         c.execute('''CREATE TABLE IF NOT EXISTS pings
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,25 +36,88 @@ def init_db():
                       timestamp REAL,
                       latency REAL,
                       status TEXT)''')
+                      
+        c.execute('''CREATE TABLE IF NOT EXISTS hosts
+                     (host TEXT PRIMARY KEY)''')
         
-        # Check if host column exists (migration for existing users)
+        # Default hosts if empty (so cron has something to do on cold start)
+        c.execute("SELECT count(*) FROM hosts")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO hosts (host) VALUES ('8.8.8.8')")
+            c.execute("INSERT INTO hosts (host) VALUES ('google.com')")
+
+        # ... (migration logic) ...
         c.execute("PRAGMA table_info(pings)")
-        columns = [info[1] for info in c.fetchall()]
-        if 'host' not in columns:
-            print("Migrating DB: Adding host column")
-            c.execute("ALTER TABLE pings ADD COLUMN host TEXT DEFAULT 'unknown'")
-            
+        # ...
+        
     except Exception as e:
         print(f"DB Init Error: {e}")
         
     conn.commit()
     conn.close()
 
-# Initialize DB
-init_db()
+# ... (existing code) ...
 
-class PingTarget(BaseModel):
+class HostItem(BaseModel):
     host: str
+
+@app.get("/api/hosts")
+def get_hosts():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT host FROM hosts")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+@app.post("/api/hosts")
+def add_host(item: HostItem):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO hosts (host) VALUES (?)", (item.host,))
+        conn.commit()
+        conn.close()
+        return {"status": "added", "host": item.host}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.delete("/api/hosts/{host}")
+def remove_host(host: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM hosts WHERE host=?", (host,))
+        conn.commit()
+        conn.close()
+        return {"status": "removed", "host": host}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/cron")
+def run_cron():
+    """
+    This endpoint is called by Vercel Cron Jobs.
+    It fetches all hosts from DB and pings them.
+    """
+    hosts = get_hosts()
+    results = []
+    
+    for host in hosts:
+        # Re-use the existing ping logic manually or call the function
+        # Calling perform_ping directly is easier since we have the logic there
+        # but perform_ping returns a Pydantic model or dict.
+        # Let's just instantiate the target and call the function.
+        try:
+            res = perform_ping(PingTarget(host=host))
+            results.append(res)
+        except:
+            results.append({"host": host, "status": "failed_job"})
+            
+    return {"cron_status": "completed", "results": results}
+
+@app.get("/", response_class=HTMLResponse)
+# ... (existing read_root)
 
 @app.get("/api/health")
 def health_check():
