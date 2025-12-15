@@ -11,7 +11,7 @@ import statistics
 
 
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 app = FastAPI()
 
@@ -28,7 +28,10 @@ app.add_middleware(
 DB_PATH = "/tmp/monitor.db" if os.environ.get("VERCEL") else "monitor.db"
 
 
-# ... (inside init_db)
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
     try:
         c.execute('''CREATE TABLE IF NOT EXISTS pings
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,23 +43,30 @@ DB_PATH = "/tmp/monitor.db" if os.environ.get("VERCEL") else "monitor.db"
         c.execute('''CREATE TABLE IF NOT EXISTS hosts
                      (host TEXT PRIMARY KEY)''')
         
-        # Default hosts if empty (so cron has something to do on cold start)
+        # Default hosts if empty
         c.execute("SELECT count(*) FROM hosts")
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO hosts (host) VALUES ('8.8.8.8')")
-            c.execute("INSERT INTO hosts (host) VALUES ('google.com')")
+            defaults = ['8.8.8.8', '36.64.212.42', '112.78.46.69']
+            for h in defaults:
+                c.execute("INSERT INTO hosts (host) VALUES (?)", (h,))
 
-        # ... (migration logic) ...
+        # Check if host column exists (migration for existing users)
         c.execute("PRAGMA table_info(pings)")
-        # ...
-        
+        columns = [info[1] for info in c.fetchall()]
+        if 'host' not in columns:
+            print("Migrating DB: Adding host column")
+            c.execute("ALTER TABLE pings ADD COLUMN host TEXT DEFAULT 'unknown'")
+            
     except Exception as e:
         print(f"DB Init Error: {e}")
         
     conn.commit()
     conn.close()
 
-# ... (existing code) ...
+# Initialize DB
+init_db()
+
+
 
 class HostItem(BaseModel):
     host: str
@@ -116,8 +126,7 @@ def run_cron():
             
     return {"cron_status": "completed", "results": results}
 
-@app.get("/", response_class=HTMLResponse)
-# ... (existing read_root)
+
 
 @app.get("/api/health")
 def health_check():
@@ -234,10 +243,7 @@ def get_stats(host: str = None):
     
     return data[::-1]
 
-from fastapi.responses import HTMLResponse, FileResponse
-import os
 
-# ... (imports)
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
