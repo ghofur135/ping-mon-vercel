@@ -155,7 +155,19 @@ def get_stats(host: str = None):
     
     return data[::-1]
 
-# Mount current directory for local development (to serve index.html)
-# Warning: In production Vercel serves static files directly, this is just for local Uvicorn
-if not os.environ.get("VERCEL"):
-    app.mount("/", StaticFiles(directory=".", html=True), name="root")
+from fastapi.responses import HTMLResponse, FileResponse
+import os
+
+# ... (imports)
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    # Serve index.html from the same directory as this script
+    base_dir = os.path.dirname(os.path.realpath(__file__))
+    file_path = os.path.join(base_dir, "index.html")
+    with open(file_path, "r") as f:
+        return f.read()
+
+# Mount current directory for local development (fallback if needed, but root is now handled above)
+# We can remove the old app.mount logic or keep it for assets if we had them.
+# For this single-file app, the root handler is sufficient.
